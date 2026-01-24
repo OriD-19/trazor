@@ -1,11 +1,17 @@
-// go:build ignore
-
+//go:build ignore
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 
 struct connection_info {
     int port;
 };
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, 1024);
+} latency SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_QUEUE);
