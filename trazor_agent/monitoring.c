@@ -48,11 +48,13 @@ int get_latency_on_end(struct pt_regs *ctx) {
 
     // get start time of this request 
     u64 *init = bpf_map_lookup_elem(&latency, &pid);
+    if (init) {
+        u64 delta = ts - *init;
+        req_info->latency_ns = delta;
+        req_info->pid = pid;
+    }
 
-    u64 delta = ts - *init;
-
-    req_info->latency_ns = delta;
-    req_info->pid = pid;
+    bpf_ringbuf_submit(req_info, 0);
 
     return 0;
 }
