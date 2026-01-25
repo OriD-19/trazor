@@ -27,16 +27,28 @@ struct trace_event_raw_sys_enter_connect {
     u64 addrlen;
 };
 
-SEC("tp/syscalls/sys_enter_connect")
-int collect_enter_traces(struct trace_event_raw_sys_enter_connect *ctx) {
+SEC("xdp") 
+int syn_receive(struct xdp_md *ctx) {
+
+    u64 ts = bpf_ktime_get_ns();
+    u32 pid = bpf_get_current_pid_tgid() >> 32; // left-shift 32 to drop the top user-related 32-bits
+
     
-    struct sockaddr_in addr;
+    bpf_map_update_elem(&latency, &pid, &ts, BPF_ANY);
 
-    if (ctx->uservaddr != NULL) {
-        bpf_probe_read_user(&addr, sizeof(addr), ctx->uservaddr); // addr recieves the data
-    }
-
-    return 0;
+    return XDP_PASS;
 }
 
+// SEC("tp/syscalls/sys_enter_connect")
+// int collect_enter_traces(struct trace_event_raw_sys_enter_connect *ctx) {
+//
+//     struct sockaddr_in addr;
+//
+//     if (ctx->uservaddr != NULL) {
+//         bpf_probe_read_user(&addr, sizeof(addr), ctx->uservaddr); // addr recieves the data
+//     }
+//
+//     return 0;
+// }
+//
 char __license[] SEC("license") = "Dual MIT/GPL";
