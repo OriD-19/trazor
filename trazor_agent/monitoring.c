@@ -20,7 +20,7 @@ struct {
     __uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
-SEC("uprobe/ngx_event_accept")
+SEC("uprobe/ngx_http_process_request")
 int get_conn_start(struct pt_regs *ctx) {
 
     u64 ts = bpf_ktime_get_ns();
@@ -28,10 +28,12 @@ int get_conn_start(struct pt_regs *ctx) {
 
     bpf_map_update_elem(&latency, &pid, &ts, BPF_NOEXIST); 
 
+    bpf_printk("Accepted connection from pid %d at time %llu", pid, ts);
+
     return 0;
 }
 
-SEC("uprobe/ngx_http_finalize_request")
+SEC("uprobe/ngx_http_free_request")
 int get_latency_on_end(struct pt_regs *ctx) {
     struct http_event *req_info;
     u32 pid = bpf_get_current_pid_tgid() >> 32;
@@ -50,15 +52,11 @@ int get_latency_on_end(struct pt_regs *ctx) {
         u64 delta = ts - *init;
         req_info->latency_ns = delta;
         req_info->pid = pid;
-    }
+    } 
 
     bpf_ringbuf_submit(req_info, 0);
 
-    // cleanup the map
-    if (bpf_map_delete_elem(&latency, &pid) < 0) {
-        bpf_printk("Failed to delete key %d", pid);
-        return 0;
-    }
+    bpf_map_delete_elem(&latency, &pid);
 
     return 0;
 }

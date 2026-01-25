@@ -37,15 +37,15 @@ func main() {
 		log.Fatalf("opening executable: %v", err)
 	}
 
-	conn_start, err := executable.Uprobe("ngx_event_accept", objs.GetConnStart, nil)
+	conn_start, err := executable.Uprobe("ngx_http_process_request", objs.GetConnStart, nil)
 	if err != nil {
-		log.Fatalf("opening uprobe 'ngx_event_accept': %v", err)
+		log.Fatalf("opening uprobe 'ngx_http_process_request': %v", err)
 	}
 	defer conn_start.Close()
 
-	conn_end, err := executable.Uprobe("ngx_http_finalize_request", objs.GetLatencyOnEnd, nil)
+	conn_end, err := executable.Uprobe("ngx_http_free_request", objs.GetLatencyOnEnd, nil)
 	if err != nil {
-		log.Fatalf("opening uprobe 'ngx_http_finalize_connection': %v", err)
+		log.Fatalf("opening uprobe 'ngx_http_free_request': %v", err)
 	}
 	defer conn_end.Close()
 	
