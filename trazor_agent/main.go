@@ -1,6 +1,9 @@
 package main
+
 //go:generate go tool bpf2go -tags linux trazor_agent monitoring.c
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +12,12 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
 )
+
+type HttpEvent struct {
+	Timestamp uint64;
+	LatencyNs uint64;
+	ProcessId uint32;
+}
 
 func main() {
 	// boilerplate code
@@ -56,7 +65,13 @@ func main() {
 				log.Fatal("Reading ringbuf: ", err)
 			}
 
-			fmt.Println("Event: ", string(record.RawSample))
+			var event HttpEvent
+			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+				fmt.Printf("parsing event: %v", err)	
+				continue
+			}
+
+			fmt.Printf("Event: PID=%d, Latency=%dus\n", event.ProcessId, event.LatencyNs/1000)
 		}
 	}()
 

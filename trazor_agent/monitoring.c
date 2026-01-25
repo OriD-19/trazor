@@ -3,8 +3,6 @@
 #include <bpf/bpf_helpers.h>
 
 struct http_event {
-    __u32 __padding__;
-
     __u64 timestamp;
     __u64 latency_ns;
     __u32 pid;
