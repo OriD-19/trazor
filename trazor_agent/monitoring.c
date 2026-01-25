@@ -12,7 +12,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u32);
     __type(value, __u64);
-    __uint(max_entries, 192 * 1024);
+    __uint(max_entries, 256 * 1024);
 } latency SEC(".maps");
 
 struct {
@@ -24,9 +24,9 @@ SEC("uprobe/ngx_event_accept")
 int get_conn_start(struct pt_regs *ctx) {
 
     u64 ts = bpf_ktime_get_ns();
-    u64 pid = bpf_get_current_pid_tgid() >> 32; // left-shift for process id only
+    u32 pid = bpf_get_current_pid_tgid() >> 32; // left-shift for process id only
 
-    bpf_map_update_elem(&latency, &pid, &ts, BPF_ANY); 
+    bpf_map_update_elem(&latency, &pid, &ts, BPF_NOEXIST); 
 
     return 0;
 }
@@ -34,7 +34,7 @@ int get_conn_start(struct pt_regs *ctx) {
 SEC("uprobe/ngx_http_finalize_request")
 int get_latency_on_end(struct pt_regs *ctx) {
     struct http_event *req_info;
-    u64 pid = bpf_get_current_pid_tgid() >> 32;
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
     u64 ts = bpf_ktime_get_ns();
 
     // last value is always 0, for some reason...
@@ -54,5 +54,13 @@ int get_latency_on_end(struct pt_regs *ctx) {
 
     bpf_ringbuf_submit(req_info, 0);
 
+    // cleanup the map
+    if (bpf_map_delete_elem(&latency, &pid) < 0) {
+        bpf_printk("Failed to delete key %d", pid);
+        return 0;
+    }
+
     return 0;
 }
+
+char __license[] SEC("license") = "Dual MIT/GPL";
