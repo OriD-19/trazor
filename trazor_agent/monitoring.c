@@ -33,7 +33,7 @@ int get_conn_start(struct pt_regs *ctx) {
     return 0;
 }
 
-SEC("uprobe/ngx_http_finalize_connection")
+SEC("uprobe/ngx_http_finalize_request")
 int get_latency_on_end(struct pt_regs *ctx) {
     struct http_event *req_info;
     u64 pid = bpf_get_current_pid_tgid() >> 32;

@@ -23,8 +23,23 @@ func main() {
 	defer objs.Close()
 
 	// attach the programs to their respective uprobes
-	link.Kprobe("get_conn_start", objs.GetConnStart, nil)
-	link.Kprobe("get_latency_on_end", objs.GetLatencyOnEnd, nil)
+	executable, err := link.OpenExecutable("/usr/sbin/nginx")
+	if err != nil {
+		log.Fatalf("opening executable: %v", err)
+	}
+
+	conn_start, err := executable.Uprobe("ngx_event_accept", objs.GetConnStart, nil)
+	if err != nil {
+		log.Fatalf("opening uprobe 'ngx_event_accept': %v", err)
+	}
+	defer conn_start.Close()
+
+	conn_end, err := executable.Uprobe("ngx_http_finalize_request", objs.GetLatencyOnEnd, nil)
+	if err != nil {
+		log.Fatalf("opening uprobe 'ngx_http_finalize_connection': %v", err)
+	}
+	defer conn_end.Close()
+	
 
 	ringBuf, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -33,6 +48,7 @@ func main() {
 	}
 
 	go func() {
+		defer ringBuf.Close()
 		for {
 			record, err := ringBuf.Read()
 
@@ -41,10 +57,6 @@ func main() {
 			}
 
 			fmt.Println("Event: ", string(record.RawSample))
-
-			if err := ringBuf.Close(); err != nil {
-				log.Fatal("Closing ringbuf reader: ", err)
-			}
 		}
 	}()
 
