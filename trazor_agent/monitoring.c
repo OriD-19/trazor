@@ -2,53 +2,56 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 
-struct connection_info {
-    int port;
+struct http_event {
+    __u64 timestamp;
+    __u64 latency_ns;
+    __u32 pid;
 };
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, u32);
-    __type(value, u64);
-    __uint(max_entries, 1024);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, 256 * 1024);
 } latency SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_QUEUE);
-    __type(value, struct connection_info);
-    __uint(max_entries, 500);
-} sock_info SEC(".maps");
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} events SEC(".maps");
 
-struct trace_event_raw_sys_enter_connect {
-    u64 __unused__;
-    u32 _syscall_nr;
-    u64 fd;
-    struct sockaddr *uservaddr;
-    u64 addrlen;
-};
-
-SEC("xdp") 
-int syn_receive(struct xdp_md *ctx) {
+SEC("uprobe/ngx_event_accept")
+int get_conn_start(struct pt_regs *ctx) {
 
     u64 ts = bpf_ktime_get_ns();
-    u32 pid = bpf_get_current_pid_tgid() >> 32; // left-shift 32 to drop the top user-related 32-bits
+    u64 pid = bpf_get_current_pid_tgid() >> 32; // left-shift for process id only
 
-    
-    bpf_map_update_elem(&latency, &pid, &ts, BPF_ANY);
+    bpf_map_update_elem(&latency, &pid, &ts, BPF_ANY); 
 
-    return XDP_PASS;
+    return 0;
 }
 
-// SEC("tp/syscalls/sys_enter_connect")
-// int collect_enter_traces(struct trace_event_raw_sys_enter_connect *ctx) {
-//
-//     struct sockaddr_in addr;
-//
-//     if (ctx->uservaddr != NULL) {
-//         bpf_probe_read_user(&addr, sizeof(addr), ctx->uservaddr); // addr recieves the data
-//     }
-//
-//     return 0;
-// }
-//
-char __license[] SEC("license") = "Dual MIT/GPL";
+SEC("uprobe/ngx_http_finalize_connection")
+int get_latency_on_end(struct pt_regs *ctx) {
+
+    struct http_event *req_info;
+    u64 pid = bpf_get_current_pid_tgid() >> 32;
+    u64 ts = bpf_ktime_get_ns();
+
+    // last value is always 0, for some reason...
+    req_info = bpf_ringbuf_reserve(&req_info, sizeof(*req_info), 0);
+    if (!req_info) // no valid memory allocated, returned NULL
+        return 0;
+
+    req_info->timestamp = ts;
+
+    // get start time of this request 
+    u64 init = *(u64*)bpf_map_lookup_elem(&latency, &pid);
+
+    u64 delta = ts - init;
+
+    req_info->latency_ns = delta;
+    req_info->pid = pid;
+
+    return 0;
+}
