@@ -4,9 +4,14 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -14,12 +19,31 @@ import (
 )
 
 type HttpEvent struct {
-	Timestamp uint64;
-	LatencyNs uint64;
-	ProcessId uint32;
+	Timestamp uint64
+	LatencyNs uint64
+	ProcessId uint32
 }
 
+// Configuration constants
+const (
+	WindowDuration     = 10 * time.Second
+	WebSocketServerURL = "ws://localhost:8080/monitoring"
+	AgentID            = "trazor-agent-1"
+)
+
 func main() {
+	// Parse command line flags
+	testMode := flag.Bool("test", false, "Run component tests and exit")
+	flag.Parse()
+
+	if *testMode {
+		runTests()
+		return
+	}
+	// Set up graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
 	// boilerplate code
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatal("Removing Memlock: ", err)
@@ -48,34 +72,107 @@ func main() {
 		log.Fatalf("opening uprobe 'ngx_http_free_request': %v", err)
 	}
 	defer conn_end.Close()
-	
 
+	// Initialize components
+	metricsChannel := make(chan *WindowMetrics, 10) // Buffer for metrics
+	windowAggregator := NewWindowAggregator(WindowDuration, metricsChannel)
+	wsClient := NewWebSocketClient(WebSocketServerURL, AgentID)
+
+	// Connect to WebSocket server (non-blocking)
+	go func() {
+		if err := wsClient.Connect(); err != nil {
+			log.Printf("Failed to connect to WebSocket server: %v", err)
+			log.Printf("Continuing with local processing only...")
+		}
+	}()
+
+	// Start window ticker for periodic aggregation
+	windowTicker := time.NewTicker(WindowDuration)
+	defer windowTicker.Stop()
+
+	// Start metrics sender goroutine
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case metrics := <-metricsChannel:
+				if wsClient.IsConnected() {
+					wsClient.SendMetrics(metrics)
+					log.Printf("Sent metrics: %d requests, avg=%.2fμs, P50=%dμs, P95=%dμs, P99=%dμs",
+						metrics.TotalRequests, metrics.AvgLatency,
+						metrics.P50Latency, metrics.P95Latency, metrics.P99Latency)
+				} else {
+					log.Printf("WebSocket not connected, metrics dropped: %d requests", metrics.TotalRequests)
+				}
+			case <-sigChan:
+				return
+			}
+		}
+	}()
+
+	// Start window rotation goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-windowTicker.C:
+				windowAggregator.RotateWindow()
+			case <-sigChan:
+				return
+			}
+		}
+	}()
+
+	// Start ringbuf reader
 	ringBuf, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
-		log.Fatal("Opening ringbuf reader: ", err)	
-		os.Exit(1);
+		log.Fatal("Opening ringbuf reader: ", err)
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		defer ringBuf.Close()
-		for {
-			record, err := ringBuf.Read()
 
+		for {
+			select {
+			case <-sigChan:
+				return
+			default:
+			}
+
+			record, err := ringBuf.Read()
 			if err != nil {
-				log.Fatal("Reading ringbuf: ", err)
+				log.Printf("Reading ringbuf: %v", err)
+				continue
 			}
 
 			var event HttpEvent
 			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
-				fmt.Printf("parsing event: %v", err)	
+				fmt.Printf("parsing event: %v", err)
 				continue
 			}
 
+			// Add sample to current window
+			windowAggregator.AddSample(event.ProcessId, event.LatencyNs, int64(event.Timestamp))
+
+			// Optional: Keep console output for debugging
 			fmt.Printf("Event: PID=%d, Latency=%dus\n", event.ProcessId, event.LatencyNs/1000)
 		}
 	}()
 
-	for {
+	// Wait for shutdown signal
+	<-sigChan
+	log.Printf("Shutting down gracefully...")
 
-	}
+	// Close WebSocket connection
+	wsClient.Disconnect()
+
+	// Wait for goroutines to finish
+	wg.Wait()
+
+	log.Printf("Shutdown complete")
 }
