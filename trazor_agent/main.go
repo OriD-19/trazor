@@ -27,7 +27,7 @@ type HttpEvent struct {
 // Configuration constants
 const (
 	WindowDuration     = 10 * time.Second
-	WebSocketServerURL = "ws://localhost:8080/monitoring"
+	WebSocketServerURL = "ws://localhost:8085/monitoring"
 	AgentID            = "trazor-agent-1"
 )
 
@@ -92,13 +92,11 @@ func main() {
 
 	// Start metrics sender goroutine
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case metrics := <-metricsChannel:
-				if wsClient.IsConnected() {
+				if wsClient.IsConnected() { // check connection
 					wsClient.SendMetrics(metrics)
 					log.Printf("Sent metrics: %d requests, avg=%.2fμs, P50=%dμs, P95=%dμs, P99=%dμs",
 						metrics.TotalRequests, metrics.AvgLatency,
@@ -110,21 +108,19 @@ func main() {
 				return
 			}
 		}
-	}()
+	})
 
 	// Start window rotation goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-windowTicker.C:
-				windowAggregator.RotateWindow()
+				windowAggregator.RotateWindow() // each 10 seconds, rotate the metrics window
 			case <-sigChan:
 				return
 			}
 		}
-	}()
+	})
 
 	// Start ringbuf reader
 	ringBuf, err := ringbuf.NewReader(objs.Events)
@@ -132,9 +128,7 @@ func main() {
 		log.Fatal("Opening ringbuf reader: ", err)
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer ringBuf.Close()
 
 		for {
@@ -150,6 +144,7 @@ func main() {
 				continue
 			}
 
+			// parse the binary record to type-safe struct
 			var event HttpEvent
 			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
 				fmt.Printf("parsing event: %v", err)
@@ -162,7 +157,7 @@ func main() {
 			// Optional: Keep console output for debugging
 			fmt.Printf("Event: PID=%d, Latency=%dus\n", event.ProcessId, event.LatencyNs/1000)
 		}
-	}()
+	})
 
 	// Wait for shutdown signal
 	<-sigChan

@@ -91,10 +91,10 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func main() {
 	http.HandleFunc("/monitoring", handleWebSocket)
 
-	log.Printf("Starting WebSocket test server on :8080")
-	log.Printf("Connect to: ws://localhost:8080/monitoring")
+	log.Printf("Starting WebSocket test server on :8085")
+	log.Printf("Connect to: ws://localhost:8085/monitoring")
 
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := http.ListenAndServe(":8085", nil); err != nil {
 		log.Fatal("Server error:", err)
 	}
 }
